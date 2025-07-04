@@ -19,4 +19,5 @@ EXPOSE $PORT
 
 COPY --from=builder /app/target/*.jar app.jar
 
+ENV SPRING_PROFILES_ACTIVE=server
 ENTRYPOINT ["java", "-jar", "app.jar"]

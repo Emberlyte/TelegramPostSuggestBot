@@ -7,7 +7,6 @@ public class TelegramBotConstats {
     public static final String CALLBACK_BAN_PREFIX = "ban_";
 
     public static final String COMMAND_START = "/start";
-    public static final String COMMAND_ADMIN_PENDING = "/admin_pending";
     
     public static final String MSG_GREETING = "👋 Привет! Напишите свой пост для предложения в канал.";
     public static final String MSG_POST_SENT = "✅ Ваш пост отправлен на модерацию!";
@@ -23,4 +22,7 @@ public class TelegramBotConstats {
     public static final String USER_SUCCESSFULLY_BANNED = "✅ Пользователь был успешно заблокирован";
     public static final String USER_HAS_BANNED = "❌ Вы были заблокированы в этом боте";
     public static final String CALLBACK_IS_STARTING = "⚠️ Действие уже выполняется. Подождите.";
+    public static final String CHECK_ALL_POSTS = "👁️ Посмотреть все посты";
+    public static final String PUBLISH_ALL_POSTS = "✅ Выложить все посты";
+    public static final String SEND_POST_TO_ADMIN = "📤 Отправить пост";
 }

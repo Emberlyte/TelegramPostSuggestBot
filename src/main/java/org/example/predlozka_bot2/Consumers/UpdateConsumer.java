@@ -25,6 +25,7 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMa
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardRow;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardButton;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardRow;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import org.telegram.telegrambots.meta.generics.TelegramClient;
@@ -100,11 +101,13 @@ public class UpdateConsumer implements LongPollingSingleThreadUpdateConsumer {
            if (text.equals(TelegramBotConstats.COMMAND_START)){
                sendMessage(chatId, TelegramBotConstats.MSG_GREETING);
                sendKeyBoard(chatId);
-           } else if (text.equals("Отправить пост")) {
+           } else if (text.equals(TelegramBotConstats.SEND_POST_TO_ADMIN)) {
                sendMessage(chatId, TelegramBotConstats.MSG_GREETING);
-           } else if (text.equals(TelegramBotConstats.COMMAND_ADMIN_PENDING) && adminIDs.contains(senderId)) {
-               sendPendingPostsToAdmin(chatId);
-           } else {
+           } else if (text.equals(TelegramBotConstats.CHECK_ALL_POSTS) && adminIDs.contains(senderId)) {
+               checkAllPendingPosts(chatId, text);
+           } else if (text.equals(TelegramBotConstats.PUBLISH_ALL_POSTS) && adminIDs.contains(senderId)){
+               publishAllPosts(chatId);
+            } else {
                processNewSuggestion(chatId, text, senderId, senderUsername);
            }
        } else if (message.hasVideo()) {
@@ -118,7 +121,7 @@ public class UpdateConsumer implements LongPollingSingleThreadUpdateConsumer {
 
     private void sendKeyBoard(Long chatID){
         if (chatID == null) {
-            log.error("Ошибка чатайди равен нулю");
+            log.error("Ошибка: chatID равен нулю");
             return;
         }
         try {
@@ -128,7 +131,7 @@ public class UpdateConsumer implements LongPollingSingleThreadUpdateConsumer {
                 .chatId(chatID.toString())
                 .build();
 
-        List<KeyboardRow> rows = List.of(new KeyboardRow("Отправить пост"));
+        List<KeyboardRow> rows = List.of(new KeyboardRow(TelegramBotConstats.SEND_POST_TO_ADMIN));
 
         ReplyKeyboardMarkup markup = new ReplyKeyboardMarkup(rows);
         markup.setResizeKeyboard(true);
@@ -320,7 +323,7 @@ public class UpdateConsumer implements LongPollingSingleThreadUpdateConsumer {
                     senderUserName, realSenderID);
             return;
         }
-
+            sendKeyboardAdminPanel(chatID);
         if (!adminIDs.contains(chatID)) {
             log.warn("Callback получен не из админского чата. ChatID: {}, SenderID: {}",
                     chatID, realSenderID);
@@ -343,7 +346,7 @@ public class UpdateConsumer implements LongPollingSingleThreadUpdateConsumer {
 
         try {
             if (callBackData.startsWith(TelegramBotConstats.CALLBACK_PUBLISH_PREFIX)){
-                String postIDStr = callBackData.replace("publish_", "");
+                String postIDStr = callBackData.replace(TelegramBotConstats.CALLBACK_PUBLISH_PREFIX, "");
                 if (!isValidLong(postIDStr)) {
                     log.warn("Некорректный(publish) ID поста в callback: {}", postIDStr);
                     sendMessage(chatID, "Ошибка: некорректный ID поста");
@@ -353,7 +356,7 @@ public class UpdateConsumer implements LongPollingSingleThreadUpdateConsumer {
                 publishPost(postID, chatID, messageId);
             }
             else if (callBackData.startsWith(TelegramBotConstats.CALLBACK_REJECT_PREFIX)){
-                String postIDStr = callBackData.replace("reject_", "");
+                String postIDStr = callBackData.replace(TelegramBotConstats.CALLBACK_REJECT_PREFIX, "");
                 if (!isValidLong(postIDStr)) {
                     log.warn("Некорректный(reject) ID поста в callback: {}", postIDStr);
                     sendMessage(chatID,"Ошибка: некорректный ID поста");
@@ -363,7 +366,7 @@ public class UpdateConsumer implements LongPollingSingleThreadUpdateConsumer {
                 rejectedPost(postID, chatID, messageId);
             }
             else if (callBackData.startsWith(TelegramBotConstats.CALLBACK_BAN_PREFIX)){
-                String senderIDStr = callBackData.replace("ban_", "");
+                String senderIDStr = callBackData.replace(TelegramBotConstats.CALLBACK_BAN_PREFIX, "");
                 if (!isValidLong(senderIDStr)) {
                     log.warn("Некорректный ID пользователя в callback: {}", senderIDStr);
                     sendMessage(chatID, "Ошибка: некорректный ID пользователя");
@@ -395,8 +398,106 @@ public class UpdateConsumer implements LongPollingSingleThreadUpdateConsumer {
         }
     }
 
+    private void sendKeyboardAdminPanel(Long chatId){
+        SendMessage message = SendMessage
+                .builder()
+                .text("Меню")
+                .chatId(chatId)
+                .build();
+
+        var showPendingPosts = KeyboardButton
+                .builder()
+                .text(TelegramBotConstats.CHECK_ALL_POSTS)
+                .build();
+
+        var publishAllPostsButton = KeyboardButton
+                .builder()
+                .text(TelegramBotConstats.PUBLISH_ALL_POSTS)
+                .build();
+
+        List<KeyboardRow> keyboardRow = List.of(new KeyboardRow(showPendingPosts, publishAllPostsButton));
+
+        ReplyKeyboardMarkup replyKeyboardMarkup = new ReplyKeyboardMarkup(keyboardRow);
+        replyKeyboardMarkup.setResizeKeyboard(true);
+        replyKeyboardMarkup.setOneTimeKeyboard(false);
+        replyKeyboardMarkup.setSelective(false);
+        message.setReplyMarkup(replyKeyboardMarkup);
+
+        try {
+            telegramClient.execute(message);
+        } catch (TelegramApiException e) {
+            log.error("Ошибка при отправке панели для администраторов. Ошибка: {}", e.getMessage(), e);
+        }
+    }
+
+    private void checkAllPendingPosts(Long chatId, String text){
+        if (adminIDs.contains(chatId)){
+
+            if (text == null || text.isEmpty()) {
+                log.error("Ошибка при просмотре постов в предложке: Текст пустой");
+                return;
+            }
+
+            if (text.equals(TelegramBotConstats.CHECK_ALL_POSTS)){
+                sendPendingPostsToAdmin(chatId);
+            }
+        }
+    }
+
+    private void publishAllPosts(Long chatId) {
+        if (!adminIDs.contains(chatId)) {
+            sendMessage(chatId, TelegramBotConstats.MSG_NO_PERMISSIONS);
+            return;
+        }
+
+        List<Post> pendingPosts = postService.getPendingPosts();
+
+        if (pendingPosts.isEmpty()) {
+            sendMessage(chatId, TelegramBotConstats.MSG_NO_PENDING_POSTS);
+            return;
+        }
+
+        int publishedCount = 0;
+        for (Post post : pendingPosts) {
+            try {
+                if (MediaType.VIDEO.equals(post.getMediaType())){
+                    SendVideo videoToChannel = SendVideo.builder()
+                            .chatId(channelID)
+                            .video(new InputFile(post.getFileID()))
+                            .caption(post.getCaption())
+                            .build();
+                    telegramClient.execute(videoToChannel);
+                } else if (MediaType.IMAGE.equals(post.getMediaType())){
+                    SendPhoto photoToChannel = SendPhoto.builder()
+                            .chatId(channelID)
+                            .photo(new InputFile(post.getFileID()))
+                            .caption(post.getCaption())
+                            .parseMode(ParseMode.MARKDOWN)
+                            .build();
+                    telegramClient.execute(photoToChannel);
+                } else {
+                    SendMessage messageToChannel = SendMessage
+                            .builder()
+                            .chatId(channelID)
+                            .text(post.getContent())
+                            .parseMode(ParseMode.MARKDOWN)
+                            .build();
+                    telegramClient.execute(messageToChannel);
+                }
+                postService.markPostAsApproved(post.getId());
+                publishedCount++;
+
+            } catch (Exception e) {
+                log.error("Ошибка при публикации поста {}: {}", post.getId(), e.getMessage());
+            }
+        }
+
+        sendMessage(chatId, String.format("Опубликовано %d постов из %d", publishedCount, pendingPosts.size()));
+    }
+
     private void rejectedPost(Long postId, Long chatID, Integer messageId) {
         Optional<Post> optionalPost = postService.getPostById(postId);
+
 
         Post post = optionalPost.get();
 
@@ -491,7 +592,6 @@ public class UpdateConsumer implements LongPollingSingleThreadUpdateConsumer {
                     editMessageCaption(chatID, messageId, successMessage, null);
                 }
            } catch (Exception e){
-
                try {
                    if (MediaType.VIDEO.equals(post.getMediaType())){
                        editMessageCaption(chatID, messageId, TelegramBotConstats.MSG_HAS_ERROR, null);
