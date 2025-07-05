@@ -2,12 +2,15 @@ package org.example.predlozka_bot2.Service;
 
 import jakarta.transaction.Transactional;
 import lombok.extern.slf4j.Slf4j;
+import org.example.predlozka_bot2.Enums.AppealBanUserStatus;
 import org.example.predlozka_bot2.Enums.BanStatus;
 import org.example.predlozka_bot2.Model.BannedUsers;
 import org.example.predlozka_bot2.Repository.BannedUsersRepository;
 import org.springframework.stereotype.Service;
 
 import java.util.Optional;
+
+import static org.example.predlozka_bot2.Enums.AppealBanUserStatus.*;
 
 @Service
 @Slf4j
@@ -53,11 +56,53 @@ public class BanService {
 
     @Transactional
     public void unBanUser(Long senderId) {
-        log.info("Попытка разблокировать: {}", senderId);
-        getBannedUsersBySenderId(senderId).ifPresent(banEntity -> {
-            banEntity.setStatus(BanStatus.UNBANNED);
-            bannedUsersRepository.save(banEntity);
-            log.info("Разблокировка пользователя: {} , произошла успешна!", senderId);
-        });
+        try {
+            log.info("Попытка разблокировать: {}", senderId);
+            getBannedUsersBySenderId(senderId).ifPresent(banEntity -> {
+                banEntity.setStatus(BanStatus.UNBANNED);
+                bannedUsersRepository.save(banEntity);
+                log.info("Разблокировка пользователя: {} , произошла успешна!", senderId);
+
+            });
+        } catch (Exception e){
+            log.error("Ошибка при разблокировке пользователя {}: {}", senderId, e.getMessage());
+            throw e;
+        }
+    }
+
+    @Transactional
+    public void deleteBanUser(Long senderId) {
+        try {
+            if (senderId == null) {
+               log.error("ID не может быть ноль");
+               return;
+            }
+
+            log.info("Попытка удалить забаненного юзера из базы данных: {}", senderId);
+            bannedUsersRepository.deleteBannedUsersBySenderId(senderId);
+            log.info("Попытка удалить забаненного юзера из базы данных: {} , произошла успешна!", senderId);
+        } catch (Exception e){
+            log.error("Ошибка при попытке удалить забаненного юзера из базы данных: {}. Причина:{}", senderId, e.getMessage(), e);
+            throw e;
+        }
+    }
+
+    public BannedUsers isUserHasAppeal(Long senderId) {
+        log.info("Проверка существующей апелляции для пользователя: {}", senderId);
+        Optional<BannedUsers> appealUser = hasAppeal(senderId);
+
+        if (appealUser.isPresent()) {
+            BannedUsers appealEntity = appealUser.get();
+            log.info("Найдена существующая апелляция для пользователя {}, статус: {}",
+                    senderId, appealEntity.getAppealBanUserStatus());
+            return appealEntity;
+        }
+
+        log.info("Апелляция для пользователя {} не найдена", senderId);
+        return null;
+    }
+
+    private Optional<BannedUsers> hasAppeal(Long senderId) {
+        return bannedUsersRepository.findBannedUsersBySenderIdAndAppealBanUserStatusIsNotNull(senderId);
     }
 }

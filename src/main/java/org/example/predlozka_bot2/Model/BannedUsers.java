@@ -2,6 +2,7 @@ package org.example.predlozka_bot2.Model;
 
 import jakarta.persistence.*;
 import lombok.Data;
+import org.example.predlozka_bot2.Enums.AppealBanUserStatus;
 import org.example.predlozka_bot2.Enums.BanStatus;
 
 @Data
@@ -16,4 +17,11 @@ public class BannedUsers {
     @Column(nullable = false)
     @Enumerated(EnumType.ORDINAL)
     private BanStatus status = BanStatus.UNBANNED;
+
+    @Column
+    @Enumerated(EnumType.ORDINAL)
+    private AppealBanUserStatus appealBanUserStatus;
+
+    @Column
+    private String AppealText;
 }

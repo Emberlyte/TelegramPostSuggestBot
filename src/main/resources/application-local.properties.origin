@@ -1,0 +1,16 @@
+#       НАСТРОЙКИ ДЛЯ ЛОКАЛЬНОГО СЕРВЕРА
+#       SETTINGS FOR LOCAL SERVER
+spring.application.name=        //  имя вашего проекта | the name of your spring boot application
+
+telegram.bot.token=         // ваш токен телеграмм бота | your telegram bot token
+telegram.bot.users.id=      // список айди админов, которые будут модерировать посты | list of admin user ids allowed to moderate posts (comma-separated)
+telegram.channel-id=        // канал куда будут отправляться сообщения(начинается на -100) | id of the Telegram channel where posts will be sent (starts with -100)
+
+spring.datasource.url=      // ссылка на вашу базу данных(должно начинаться на jdbc) | url of your database (should start with jdbc)
+spring.datasource.username=         // юзернейм базы данных(обычно postgres) | database username(usually postgres)
+spring.datasource.password=         // пароль базы данных | database password
+spring.jpa.hibernate.ddl-auto=update
+spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.PostgreSQLDialect
+
+spring.data.redis.host=         // хост редиса(обычно localhost) | redis host (usually localhost)
+spring.data.redis.port=         // порт редиса(обычно 6379) | redis post (usually 6379)

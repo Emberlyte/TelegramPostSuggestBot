@@ -2,9 +2,12 @@ package org.example.predlozka_bot2.Consumers;
 
 import lombok.extern.slf4j.Slf4j;
 import org.example.predlozka_bot2.Constants.TelegramBotConstats;
+import org.example.predlozka_bot2.Enums.AppealBanUserStatus;
 import org.example.predlozka_bot2.Enums.MediaType;
+import org.example.predlozka_bot2.Model.BannedUsers;
 import org.example.predlozka_bot2.Model.Post;
 import org.example.predlozka_bot2.Enums.PostStatus;
+import org.example.predlozka_bot2.Repository.BannedUsersRepository;
 import org.example.predlozka_bot2.Service.BanService;
 import org.example.predlozka_bot2.Service.PostService;
 import org.example.predlozka_bot2.Service.RateLimitService;
@@ -32,9 +35,7 @@ import org.telegram.telegrambots.meta.generics.TelegramClient;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.Comparator;
-import java.util.List;
-import java.util.Optional;
+import java.util.*;
 
 @Service
 @Slf4j
@@ -45,7 +46,10 @@ public class UpdateConsumer implements LongPollingSingleThreadUpdateConsumer {
     private final BanService banService;
     private final String botToken;
 
+    private final Set<Long> usersWritingAppeal = new HashSet<>();
+
     private final RateLimitService rateLimitService;
+    private final BannedUsersRepository bannedUsersRepository;
 
     @Value("${telegram.channel-id}")
     private Long channelID;
@@ -53,12 +57,13 @@ public class UpdateConsumer implements LongPollingSingleThreadUpdateConsumer {
     @Value("${telegram.bot.users.id}")
     private List<Long> adminIDs;
 
-    public UpdateConsumer(@Value("${telegram.bot.token}") String token, PostService postService, BanService banService, RateLimitService rateLimitService) {
+    public UpdateConsumer(@Value("${telegram.bot.token}") String token, PostService postService, BanService banService, RateLimitService rateLimitService, BannedUsersRepository bannedUsersRepository) {
         this.telegramClient = new OkHttpTelegramClient(token);
         this.postService = postService;
         this.botToken = token;
         this.banService = banService;
         this.rateLimitService = rateLimitService;
+        this.bannedUsersRepository = bannedUsersRepository;
     }
 
     @Override
@@ -93,7 +98,10 @@ public class UpdateConsumer implements LongPollingSingleThreadUpdateConsumer {
         }
 
         if (banService.isUserBanned(senderId)){
-            sendMessage(chatId, TelegramBotConstats.USER_HAS_BANNED);
+            sendBanMenuToUser(chatId);
+            log.info("Забаненный юзер {} (Id: {}) использовал бота. ChatId: {}", senderUsername, senderId, chatId);
+
+            sendAppealMenu(text, chatId, senderUsername, senderId);
             return;
         }
 
@@ -101,21 +109,28 @@ public class UpdateConsumer implements LongPollingSingleThreadUpdateConsumer {
            if (text.equals(TelegramBotConstats.COMMAND_START)){
                sendMessage(chatId, TelegramBotConstats.MSG_GREETING);
                sendKeyBoard(chatId);
+               log.info("юзер {}(Id: {}) использовал команду /start. ChatId: {}", senderUsername, senderId, chatId);
            } else if (text.equals(TelegramBotConstats.SEND_POST_TO_ADMIN)) {
                sendMessage(chatId, TelegramBotConstats.MSG_GREETING);
+               log.info("юзер {}(Id: {}) отправил пост. ChatId: {}", senderUsername, senderId, chatId);
            } else if (text.equals(TelegramBotConstats.CHECK_ALL_POSTS) && adminIDs.contains(senderId)) {
                checkAllPendingPosts(chatId, text);
+               log.info("Админ {}(Id: {}) посмотрел все посты. ChatId: {}", senderUsername, senderId, chatId);
            } else if (text.equals(TelegramBotConstats.PUBLISH_ALL_POSTS) && adminIDs.contains(senderId)){
                publishAllPosts(chatId);
-            } else {
+               log.info("Админ {}(Id: {}) выложил все посты. ChatId: {}", senderUsername, senderId, chatId);
+           } else {
                processNewSuggestion(chatId, text, senderId, senderUsername);
            }
        } else if (message.hasVideo()) {
            handleVideoMessage(chatId, message.getVideo(), message.getCaption(), senderId, senderUsername);
+            log.info("юзер {}(Id: {}) отправил видео. ChatId: {}", senderUsername, senderId, chatId);
        } else if (message.hasPhoto()) {
            handlePhotoMessage(chatId, message.getPhoto(), message.getCaption(), senderId, senderUsername);
+            log.info("юзер {}(Id: {}) отправил фото. ChatId: {}", senderUsername, senderId, chatId);
        } else {
            sendMessage(chatId, TelegramBotConstats.MSG_NOT_SUPPORTED);
+            log.warn("юзер {}(Id: {}) отправил неподдерживаемое сообщение. ChatId: {}", senderUsername, senderId, chatId);
        }
     }
 
@@ -236,17 +251,17 @@ public class UpdateConsumer implements LongPollingSingleThreadUpdateConsumer {
 
         var publishPost = InlineKeyboardButton.builder()
                 .callbackData(TelegramBotConstats.CALLBACK_PUBLISH_PREFIX + post.getId())
-                .text("✅ Опубликовать")
+                .text(TelegramBotConstats.APPROVED_POST)
                 .build();
 
         var declinePost = InlineKeyboardButton.builder()
                 .callbackData(TelegramBotConstats.CALLBACK_REJECT_PREFIX + post.getId())
-                .text("❌ Отклонить")
+                .text(TelegramBotConstats.REJECTED_POST)
                 .build();
 
         var banUser = InlineKeyboardButton.builder()
                 .callbackData(TelegramBotConstats.CALLBACK_BAN_PREFIX + post.getSenderId())
-                .text("🚫 заблокировать пользователя")
+                .text(TelegramBotConstats.BAN_USER)
                 .build();
 
         List<InlineKeyboardRow> inlineKeyboardRows = List.of(new InlineKeyboardRow(publishPost, declinePost, banUser));
@@ -317,6 +332,9 @@ public class UpdateConsumer implements LongPollingSingleThreadUpdateConsumer {
         Long realSenderID = callbackQuery.getFrom().getId();
         String senderUserName = callbackQuery.getFrom().getUserName();
 
+        log.info("Получен callback chatID: {}, callBackData: '{}', realSenderID: {}",
+                chatID, callBackData, realSenderID);
+
         if (!adminIDs.contains(realSenderID)) {
             sendMessage(chatID, TelegramBotConstats.MSG_NO_PERMISSIONS);
             log.warn("Попытка несанкционированного доступа от пользователя: {} (ID: {})",
@@ -345,7 +363,29 @@ public class UpdateConsumer implements LongPollingSingleThreadUpdateConsumer {
         }
 
         try {
-            if (callBackData.startsWith(TelegramBotConstats.CALLBACK_PUBLISH_PREFIX)){
+            if (callBackData.startsWith(TelegramBotConstats.CALLBACK_ACCEPT_APPEAL_PREFIX)){
+                String senderIDStr = callBackData.replace(TelegramBotConstats.CALLBACK_ACCEPT_APPEAL_PREFIX, "");
+                if (!isValidLong(senderIDStr)) {
+                    log.warn("Некорректный ID пользователя({}) в callback: {}",TelegramBotConstats.CALLBACK_ACCEPT_APPEAL_PREFIX,senderIDStr);
+                    sendMessage(chatID, "Ошибка: некорректный ID пользователя");
+                    return;
+                }
+                Long senderID = Long.parseLong(senderIDStr);
+                acceptAppeal(senderID);
+                editMessageText(chatID, messageId, TelegramBotConstats.ADMIN_APPROVED_APPEAL, null);
+
+            } else if (callBackData.startsWith(TelegramBotConstats.CALLBACK_REJECT_APPEAL_PREFIX)){
+                String senderIDStr = callBackData.replace(TelegramBotConstats.CALLBACK_REJECT_APPEAL_PREFIX, "");
+                if (!isValidLong(senderIDStr)) {
+                    log.warn("Некорректный ID пользователя ({}) в callback: {}", TelegramBotConstats.CALLBACK_REJECT_APPEAL_PREFIX, senderIDStr);
+                    sendMessage(chatID, "Ошибка: некорректный ID пользователя");
+                    return;
+                }
+                Long senderID = Long.parseLong(senderIDStr);
+                rejectAppeal(senderID);
+                editMessageText(chatID, messageId, TelegramBotConstats.ADMIN_REJECTED_APPEAL, null);
+
+            } else if (callBackData.startsWith(TelegramBotConstats.CALLBACK_PUBLISH_PREFIX)){
                 String postIDStr = callBackData.replace(TelegramBotConstats.CALLBACK_PUBLISH_PREFIX, "");
                 if (!isValidLong(postIDStr)) {
                     log.warn("Некорректный(publish) ID поста в callback: {}", postIDStr);
@@ -354,8 +394,8 @@ public class UpdateConsumer implements LongPollingSingleThreadUpdateConsumer {
                 }
                 Long postID = Long.parseLong(postIDStr);
                 publishPost(postID, chatID, messageId);
-            }
-            else if (callBackData.startsWith(TelegramBotConstats.CALLBACK_REJECT_PREFIX)){
+                acceptAppeal(realSenderID);
+            } else if (callBackData.startsWith(TelegramBotConstats.CALLBACK_REJECT_PREFIX)){
                 String postIDStr = callBackData.replace(TelegramBotConstats.CALLBACK_REJECT_PREFIX, "");
                 if (!isValidLong(postIDStr)) {
                     log.warn("Некорректный(reject) ID поста в callback: {}", postIDStr);
@@ -364,8 +404,8 @@ public class UpdateConsumer implements LongPollingSingleThreadUpdateConsumer {
                 }
                 Long postID = Long.parseLong(postIDStr);
                 rejectedPost(postID, chatID, messageId);
-            }
-            else if (callBackData.startsWith(TelegramBotConstats.CALLBACK_BAN_PREFIX)){
+
+            } else if (callBackData.startsWith(TelegramBotConstats.CALLBACK_BAN_PREFIX)){
                 String senderIDStr = callBackData.replace(TelegramBotConstats.CALLBACK_BAN_PREFIX, "");
                 if (!isValidLong(senderIDStr)) {
                     log.warn("Некорректный ID пользователя в callback: {}", senderIDStr);
@@ -376,11 +416,12 @@ public class UpdateConsumer implements LongPollingSingleThreadUpdateConsumer {
                 banService.banUser(senderID);
                 editMessageText(chatID, messageId, TelegramBotConstats.USER_SUCCESSFULLY_BANNED, null);
                 log.info("Админ {} заблокировал пользователя {}", realSenderID, senderID);
+
             } else {
                 log.warn("Неизвестный callback data: {} от админа: {}", callBackData, realSenderID);
                 sendMessage(chatID, "Ошибка: неизвестная команда");
             }
-        }catch (Exception e){
+        } catch (Exception e) {
             log.error("Ошибка при обработке callback от админа {}: {}", realSenderID, e.getMessage(), e);
             sendMessage(chatID, "Произошла ошибка при обработке команды");
         }
@@ -442,6 +483,161 @@ public class UpdateConsumer implements LongPollingSingleThreadUpdateConsumer {
                 sendPendingPostsToAdmin(chatId);
             }
         }
+    }
+
+    private void sendBanMenuToUser(Long chatId) {
+        SendMessage message = SendMessage
+                .builder()
+                .text(TelegramBotConstats.USER_HAS_BANNED)
+                .chatId(chatId)
+                .build();
+
+        var banMessageMenuButton = KeyboardButton
+                .builder()
+                .text(TelegramBotConstats.USER_HAS_APPEAL)
+                .build();
+
+        List<KeyboardRow> keyboardRows = List.of(new KeyboardRow(banMessageMenuButton));
+
+        ReplyKeyboardMarkup replyKeyboardMarkup = new ReplyKeyboardMarkup(keyboardRows);
+
+        message.setReplyMarkup(replyKeyboardMarkup);
+        replyKeyboardMarkup.setResizeKeyboard(true);
+        replyKeyboardMarkup.setOneTimeKeyboard(false);
+
+        try {
+            telegramClient.execute(message);
+        } catch (Exception e) {
+            log.error("Ошибка при отправке бан-сообщения: {} (chatId: {})", e.getMessage(), chatId);
+        }
+    }
+
+    private void sendAppealMenu(String text, Long chatId, String senderUsername, Long senderId) {
+        if (text.equals(TelegramBotConstats.USER_HAS_APPEAL)){
+            try {
+               BannedUsers bannedUsers = banService.isUserHasAppeal(senderId);
+               if (bannedUsers != null && bannedUsers.getAppealBanUserStatus() == AppealBanUserStatus.PENDING){
+                   sendMessage(chatId, TelegramBotConstats.APPEAL_PENDING_STATUS);
+                   return;
+               }
+
+               sendMessage(chatId, "Введите вашу апелляцию");
+                usersWritingAppeal.add(senderId);
+                log.info("Забаненный юзер {}(Id: {}) начал подачу апелляции. ChatId: {}",
+                        senderUsername, senderId, chatId);
+            }catch (Exception e){
+                log.error("Ошибка при отправке апелляции юзера: {} (chatId: {})", e.getMessage(), chatId);
+            }
+        } else if (usersWritingAppeal.contains(senderId)){
+            try {
+                BannedUsers bannedUser = banService.isUserHasAppeal(senderId);
+
+                if (bannedUser == null){
+                    bannedUser = new BannedUsers();
+                    bannedUser.setSenderId(senderId);
+                    bannedUser.setAppealBanUserStatus(AppealBanUserStatus.PENDING);
+                    bannedUser.setAppealText(text);
+                    bannedUsersRepository.save(bannedUser);
+                } else {
+                    bannedUser.setAppealBanUserStatus(AppealBanUserStatus.PENDING);
+                    bannedUser.setAppealText(text);
+                    bannedUsersRepository.save(bannedUser);
+                }
+
+                sendAppealToAdmins(senderId, senderUsername, text);
+
+                sendMessage(chatId, TelegramBotConstats.APPEAL_HAS_SEND_TO_ADMIN);
+
+                usersWritingAppeal.remove(senderId);
+
+                log.info("Апелляция от юзера {}(Id: {}) отправлена админам. ChatId: {}",
+                        senderUsername, senderId, chatId);
+
+            }catch (Exception e){
+                log.error("Ошибка при сохранении апелляции юзера: {} (chatId: {})", e.getMessage(), chatId);
+                sendMessage(chatId, TelegramBotConstats.APPEAL_HAS_ERROR);
+                usersWritingAppeal.remove(senderId);
+            }
+        }
+    }
+
+    public void acceptAppeal(Long senderId) {
+        log.info("Одобрение апелляции для пользователя: {}", senderId);
+        try {
+            Optional<BannedUsers> appealUser = Optional.ofNullable(banService.isUserHasAppeal(senderId));
+
+            if (appealUser.isPresent()) {;
+                banService.deleteBanUser(senderId);
+                log.info("Апелляция одобрена для пользователя: {}", senderId);
+            }
+        } catch (Exception e){
+            log.warn("Попытка одобрить несуществующую апелляцию для пользователя: {}", senderId);
+        }
+    }
+
+    public void rejectAppeal(Long senderId) {
+        log.info("Отклонение апелляции для пользователя: {}", senderId);
+        try {
+            Optional<BannedUsers> appealUser = Optional.ofNullable(banService.isUserHasAppeal(senderId));
+
+            if (appealUser.isPresent()) {
+                BannedUsers appealEntity = appealUser.get();
+                appealEntity.setAppealBanUserStatus(AppealBanUserStatus.REJECTED);
+                bannedUsersRepository.save(appealEntity);
+                log.info("Апелляция отклонена для пользователя: {}", senderId);
+            }
+        } catch (Exception e){
+            log.warn("Попытка отклонить несуществующую апелляцию для пользователя: {}", senderId);
+        }
+    }
+
+    private void sendAppealToAdmins(Long bannedUserId, String userName, String appealText) {
+
+        var acceptAppealButton = InlineKeyboardButton.builder()
+                .callbackData(TelegramBotConstats.CALLBACK_ACCEPT_APPEAL_PREFIX + bannedUserId)
+                .text(TelegramBotConstats.APPEAL_HAS_APPROVED)
+                .build();
+
+        var rejectAppealButton = InlineKeyboardButton.builder()
+                .callbackData(TelegramBotConstats.CALLBACK_REJECT_APPEAL_PREFIX + bannedUserId)
+                .text(TelegramBotConstats.APPEAL_HAS_REJECTED)
+                .build();
+
+        List<InlineKeyboardRow> inlineKeyboardRows = List.of(
+                new InlineKeyboardRow(acceptAppealButton, rejectAppealButton)
+        );
+
+        InlineKeyboardMarkup inlineKeyboardMarkup = new InlineKeyboardMarkup(inlineKeyboardRows);
+
+        String adminMessageText = String.format(
+                "🆘 *Новая апелляция на разбан*\n\n" +
+                        "👤 Пользователь: @%s\n" +
+                        "🆔 ID: `%d`\n" +
+                        "📅 Дата апелляции: %s\n\n" +
+                        "📝 *Текст апелляции:*\n%s",
+                userName != null ? userName : "Неизвестно",
+                bannedUserId,
+                LocalDateTime.now().format(DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm")),
+                appealText != null ? appealText : "Пользователь просит разбан"
+        );
+
+        for (Long adminId : adminIDs) {
+            try {
+                SendMessage sendMessage = SendMessage.builder()
+                        .chatId(adminId)
+                        .text(adminMessageText)
+                        .parseMode(ParseMode.MARKDOWN)
+                        .replyMarkup(inlineKeyboardMarkup)
+                        .build();
+
+                telegramClient.execute(sendMessage);
+                log.info("Апелляция успешно отправлена админу: {}", adminId);
+
+            } catch (Exception e) {
+                log.error("Ошибка при отправке апелляции админу {}: {}", adminId, e.getMessage());
+            }
+        }
+        log.info("Апелляция от пользователя {} отправлена всем админам", bannedUserId);
     }
 
     private void publishAllPosts(Long chatId) {
